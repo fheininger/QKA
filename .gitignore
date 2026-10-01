@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Results are written outside the repo by default ($QSVM_RESULTS, ~/results).
+# This catches the case where someone points QSVM_RESULTS at the repo.
+results/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Agent tooling
+.claude/

@@ -1,0 +1,38 @@
+# Quantum_Kernel_Alignment -- core dependencies
+#
+# Tested on Python 3.11.13 (Linux x86_64). Versions are pinned to the
+# environment the published results were produced in.
+#
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# numpy is held below 2.0: PennyLane 0.37 is not compatible with numpy>=2.
+
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.3.1
+scikit-learn==1.8.0
+imbalanced-learn==0.14.1
+
+# quantum simulation -- pennylane-lightning provides the "lightning.qubit" device.
+# autoray, autograd, networkx and rustworkx are transitive dependencies of
+# PennyLane 0.37 that it does NOT upper-bound. Left unpinned, pip resolves newer
+# releases and `import pennylane` fails with
+#   AttributeError: module 'autoray.autoray' has no attribute 'NumpyMimic'
+# so they are pinned here to the versions the results were produced with.
+pennylane==0.37.0
+pennylane-lightning==0.37.0
+autoray==0.7.2
+autograd==1.8.0
+networkx==2.8.8
+rustworkx==0.16.0
+
+# plotting
+matplotlib==3.10.5
+seaborn==0.13.2
+
+# parallelism / progress / IO
+joblib==1.5.1
+threadpoolctl==3.6.0
+tqdm==4.67.1
+
