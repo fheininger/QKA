@@ -1276,7 +1276,7 @@ print("Classical ROC AUC:", auc_c)
 # add hamilton encoding (https://arxiv.org/pdf/2310.11891)
 # from pennylane import numpy as np
 dev = qml.device("lightning.qubit", wires=N_QUBITS, batch_obs=True, shots=3000)
-EV_TIME = 0.1
+EV_TIME = 1.0
 TROTT_STEPS = 20
 N_LAYERS = 3
 # params = np.array([EV_TIME, TROTT_STEPS], requires_grad=True)  # Add requires_grad=True
