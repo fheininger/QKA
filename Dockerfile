@@ -1,21 +1,25 @@
-# Reproduction environment for the QKA results, for Code Ocean or plain Docker.
+# Reproduction environment for the QKA results, written for Code Ocean.
 #
-# Standalone use (the repo is mounted, not copied, so results land next to it):
-#   docker build -t qka .
-#   docker run --rm -v "$PWD:/code" -v "$PWD/results:/results" qka
-#   docker run --rm -v "$PWD:/code" qka python verify_fast_kernel.py
+# Code Ocean only accepts its own base images, pulled through the REGISTRY_HOST
+# build argument it sets itself. Use this file as environment/Dockerfile of
+# the capsule. The base image ships Python 3.12, so the environment the
+# results were produced in (Python 3.11.13, pins identical to requirements.txt
+# and environment.yml) is created as a conda environment on top of it and put
+# first on PATH. Every package comes from a prebuilt wheel.
 #
-# Code Ocean: use as environment/Dockerfile. The capsule mounts the code at
-# /code and expects output under /results, which QSVM_RESULTS points at.
-#
-# Same pins as requirements.txt and environment.yml: Python 3.11.13 on Linux
-# x86_64, every package from a prebuilt wheel (no compiler in the image).
-# PennyLane 0.37 needs numpy < 2, and autoray/autograd/networkx/rustworkx are
-# pinned because PennyLane does not upper-bound them and newer releases break
-# `import pennylane`. Keep the three files in sync.
-FROM python:3.11.13-slim
+# Plain Docker works too, with the registry given explicitly:
+#   docker build --build-arg REGISTRY_HOST=registry.codeocean.com -t qka .
+#   docker run --rm -v "$PWD:/code" -v "$PWD/results:/results" qka ./run
+ARG REGISTRY_HOST
+FROM $REGISTRY_HOST/codeocean/mambaforge3:24.5.0-0-python3.12.4-ubuntu22.04
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN mamba create -y -n qka -c conda-forge --override-channels python=3.11.13 pip \
+    && mamba clean -y --all
+
+ENV PATH=/opt/conda/envs/qka/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MPLBACKEND=Agg \
     QSVM_RESULTS=/results
@@ -36,8 +40,4 @@ RUN pip install --no-cache-dir --only-binary=:all: \
         seaborn==0.13.2 \
         joblib==1.5.1 \
         threadpoolctl==3.6.0 \
-        tqdm==4.67.1 \
-    && mkdir -p /code /results
-
-WORKDIR /code
-CMD ["python", "QSVM_template.py"]
+        tqdm==4.67.1
