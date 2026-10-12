@@ -2,10 +2,8 @@
 # Code Ocean entry point ("Reproducible Run" executes /code/run).
 #
 # Everything the pipeline writes goes under $QSVM_RESULTS, so pointing it at
-# /results is all Code Ocean needs. The datasets ship in ./data of the repo;
-# when Code Ocean mounts them as a data asset under /data instead, that
-# location is found and passed on through $QSVM_DATA.
-# The same script works locally: ./run writes to ./results, using
+# /results is all Code Ocean needs; the datasets are read from ./data inside
+# the repo. The same script works locally: ./run writes to ./results, using
 # the interpreter on PATH or the one given in $PYTHON, e.g.
 #   PYTHON=~/miniforge3/envs/qmlenv/bin/python ./run
 set -euo pipefail
@@ -15,13 +13,6 @@ if [ -d /results ] && [ -w /results ]; then
     export QSVM_RESULTS="${QSVM_RESULTS:-/results}"
 else
     export QSVM_RESULTS="${QSVM_RESULTS:-$PWD/results}"
-fi
-if [ -z "${QSVM_DATA:-}" ] && [ ! -f "$PWD/data/immuno.csv" ]; then
-    found=$(find /data -maxdepth 2 -name immuno.csv -print -quit 2>/dev/null || true)
-    if [ -n "$found" ]; then
-        export QSVM_DATA="$(dirname "$found")"
-        echo "data directory: $QSVM_DATA"
-    fi
 fi
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 mkdir -p "$QSVM_RESULTS"

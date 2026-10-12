@@ -29,8 +29,6 @@ from roc_results import record_roc_comparison
 from stroke_data_preprocessing import *
 
 DATA_DIR = _Path(os.environ.get("QSVM_DATA", _Path(__file__).resolve().parent / "data"))
-if not DATA_DIR.is_dir() and _Path("/data").is_dir():
-    DATA_DIR = _Path("/data")  # Code Ocean mounts the data assets here, not under /code
 RESULTS = _Path(os.environ.get("QSVM_RESULTS", _Path.home() / "results"))
 
 N_QUBITS = 5  # q in the manuscript; SVD components = qubit-register size
