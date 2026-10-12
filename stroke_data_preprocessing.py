@@ -65,7 +65,7 @@ def preprocess_stroke_dataset(data, normalize=False, scale=False, apply_pca=Fals
 
     if apply_pca:
         if N is None or N > X.shape[1]:  
-            raise ValueError(f"PCA components (N={N}) must be specified and ≤ {X.shape[1]}.")
+            raise ValueError(f"PCA components (N={N}) must be specified and <= {X.shape[1]}.")
         pca = PCA(n_components=N)
         X_train = pd.DataFrame(pca.fit_transform(X_train))
         X_test = pd.DataFrame(pca.transform(X_test))

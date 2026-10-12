@@ -51,7 +51,7 @@ def record_roc_comparison(path, auc_q, auc_c, ci=None, dataset="", model="", qub
 
     if auc_q <= auc_c:
         if os.path.exists(os.path.join(win_dir, base)):
-            print(f"⚠️ {base}: quantum {auc_q:.3f} no longer beats RBF {auc_c:.3f}, "
+            print(f"WARNING: {base}: quantum {auc_q:.3f} no longer beats RBF {auc_c:.3f}, "
                   f"but an earlier winning copy is kept in {WIN_SUBDIR}/ (superseded)")
         return False
 
@@ -71,5 +71,5 @@ def record_roc_comparison(path, auc_q, auc_c, ci=None, dataset="", model="", qub
         "qubits": qubits,
         "recorded": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
-    print(f"✅ {base}: quantum {auc_q:.3f} > RBF {auc_c:.3f} → copied to {WIN_SUBDIR}/")
+    print(f"{base}: quantum {auc_q:.3f} > RBF {auc_c:.3f}, copied to {WIN_SUBDIR}/")
     return True

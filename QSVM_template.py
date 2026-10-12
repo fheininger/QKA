@@ -5,6 +5,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import sys
+
 # --- Repository paths ------------------------------------------------------
 # Datasets ship inside the repo (./data). Results are written to $QSVM_RESULTS,
 # defaulting to ~/results. Both are overridable so nothing is machine-specific.
@@ -24,15 +25,14 @@ from tqdm import tqdm
 # defines decides how many qubits the dimensionality-reduction branches need.
 import kernel_align
 from plane_imports import *
-from quantum_smote import quantum_smote
 from roc_results import record_roc_comparison
 from stroke_data_preprocessing import *
 
 DATA_DIR = _Path(os.environ.get("QSVM_DATA", _Path(__file__).resolve().parent / "data"))
 RESULTS = _Path(os.environ.get("QSVM_RESULTS", _Path.home() / "results"))
 
-N_QUBITS = 7  # q in the manuscript; SVD components = qubit-register size
-oversampling = "SMOTE"  # Options: "QSMOTE", "SMOTE", "NONE"
+N_QUBITS = 5  # q in the manuscript; SVD components = qubit-register size
+oversampling = "SMOTE"  # Options: "SMOTE", "NONE"
 folder_roc = str(RESULTS / "roc_curves")
 folder_kernel = str(RESULTS / "kernel_matrices")
 os.makedirs(folder_roc, exist_ok=True)
@@ -135,7 +135,7 @@ def visualize_data(xs, ys, title):
     plt.show()
 
 
-FIXING = True 
+FIXING = True
 percent = 0.5
 TEST_SIZE = 0.3
 jobs = -1
@@ -146,8 +146,8 @@ align = True
 # Kernel/alignment switches. KERNEL_MODE="exact" builds every Gram from feature
 # states (|<phi(a)|phi(b)>|^2) instead of one circuit per entry: ~560x faster and
 # exact rather than shot-sampled. "shots" restores the legacy per-entry path.
-# ALIGN_ONLY skips the baseline pipeline so the search can be run on its own.
-# Do NOT use GRID_SEARCH=False for that -- line 2589 reads `grid` outside its guard.
+# ALIGN_ONLY skips the baseline pipeline so the search can be run on its own
+# (GRID_SEARCH must stay True: the classical baseline reads `grid`).
 KERNEL_MODE = "exact"  # "exact" | "shots"
 # Qubit topology the features are loaded onto. The Ising couplings sit on
 # nearest-neighbour pairs, so an open CHAIN of n qubits carries only n-1 features
@@ -155,29 +155,30 @@ KERNEL_MODE = "exact"  # "exact" | "shots"
 # component never entered the circuit. "ring" closes the chain with the (n-1, 0)
 # pair and loads all n. This changes the kernel: nothing computed under "chain"
 # is comparable to a "ring" number, so the outputs are tagged separately.
-TOPOLOGY = "ring"  # "ring" | "chain" (chain reproduces pre-fix results)
+TOPOLOGY = "ring"  # "ring" | "chain"
 kernel_align.TOPOLOGY = TOPOLOGY
+
+# Register width. With CHAIN_SPARE_WIRE the chain gets one extra wire, so it
+# carries N_QUBITS couplings and -- like the ring -- encodes every SVD
+# component; the circuit is then N_QUBITS + 1 wide while the SVD still keeps
+# N_QUBITS components. False reproduces the pre-fix chain that drops the last
+# feature. The ring never needs the spare wire. Chain-with-spare is a third,
+# distinct kernel (open boundary on n+1 qubits), tagged "_<N_WIRES>w".
+CHAIN_SPARE_WIRE = True
+N_WIRES = kernel_align.qubits_for(N_QUBITS, TOPOLOGY) if CHAIN_SPARE_WIRE else N_QUBITS
 ALIGN_ONLY = False  # True: run the alignment search only
 ALIGN_PRESET = None  # [t, T, L] from an earlier search; skips searching
 ALIGN_OUT = str(RESULTS / "alignment")
 roc_multiclass = "raise"
-### Test- unfortunately, I am little bit stupid
-"""
-At this point, it might be useful to make it possible to use different datasets. Interface is not intended, but some datasets might require different preprocessing steps.
-"""
 
-dataset = "pdac"
+dataset = "immuno"
 
 if dataset == "stroke":
-
-    # Stroke Data preprocessing
     from sklearn.decomposition import PCA
     from sklearn.impute import SimpleImputer
     from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import (LabelEncoder, MinMaxScaler,
-                                       StandardScaler)
+    from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
 
-    # Load your dataset
     data = pd.read_csv(DATA_DIR / "healthcare-dataset-stroke-data.csv")
     # === Step 1: Report missing values ===
     print("Missing values before processing:\n", data.isna().sum())
@@ -214,7 +215,6 @@ if dataset == "stroke":
     # === Step 6: Split features and target ===
     X = data.drop(columns=["stroke"])
     Y = data["stroke"]
-    # show full sample size
     print(f"Full dataset shape: {X.shape}, Target shape: {Y.shape}")
     # === For Fixing: take smaller part of dataset ===
     if FIXING is True:
@@ -228,17 +228,11 @@ if dataset == "stroke":
         X, Y, test_size=TEST_SIZE, stratify=Y, random_state=42
     )
 
-    # === Step 8 (Optional): Standard normalization ===
-    # scaler = StandardScaler()
-    # X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=X.columns)
-    # X_test = pd.DataFrame(scaler.transform(X_test), columns=X.columns)
-
-    # === Step 9 (Optional): Min-Max scaling ===
+    # === Step 8 (Optional): Min-Max scaling ===
     min_max_scaler = MinMaxScaler(feature_range=(0, np.pi))
     X_train = pd.DataFrame(min_max_scaler.fit_transform(X_train), columns=X.columns)
     X_test = pd.DataFrame(min_max_scaler.transform(X_test), columns=X.columns)
     N_COMPONENTS = N_QUBITS
-    # pca = PCA(n_components=N_QUBITS)
     pca = TruncatedSVD(n_components=N_QUBITS)
     xs_train = pd.DataFrame(pca.fit_transform(X_train))
     xs_test = pd.DataFrame(pca.transform(X_test))
@@ -253,27 +247,11 @@ if dataset == "stroke":
     print("Explained variance by each component:", exp_var_pca)
     print("Cumulative explained variance by truncated SVD:", np.cumsum(exp_var_pca)[-1])
 
-    # Calculate the number of qubits needed for our new dimensionality
-    # N_QUBITS = int(np.ceil(np.log2(N_COMPONENTS)))
     print(
-        f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits needed: {N_QUBITS}"
+        f"\nNumber of reduced components: {N_COMPONENTS} -> Number of Qubits needed: {N_QUBITS}"
     )
 
-    # --- Step 2: Apply Quantum-SMOTE to the preprocessed training data ---
-
-    # --- Apply Quantum-SMOTE ---
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before qsmote")
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-        print("\nClass distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
+    # --- Oversampling ---
     if oversampling == "SMOTE":
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -287,7 +265,6 @@ if dataset == "breast_cancer":
     data = load_breast_cancer()
     X = data.data
     Y = data.target
-    # show type of X and Y
     if FIXING is True:
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
@@ -298,14 +275,8 @@ if dataset == "breast_cancer":
         X, Y, test_size=TEST_SIZE, stratify=Y, random_state=42
     )
 
-    # === Step 8 (Optional): Standard normalization ===
-    # scaler = StandardScaler()
-    # X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=columns)
-    # X_test = pd.DataFrame(scaler.fit_transform(X_train), columns=X_test.columns)
-    # === Step 9 (Optional): Min-Max scaling ===
+    # === Step 8 (Optional): Min-Max scaling ===
     min_max_scaler = MinMaxScaler(feature_range=(0, np.pi))
-    # show datatype of X_train and X_test
-    print(f"X_train type: {type(X_train)}, X_test type: {type(X_test)}")
     X_train = min_max_scaler.fit_transform(X_train)
     X_test = min_max_scaler.transform(X_test)
     N_COMPONENTS = N_QUBITS
@@ -323,27 +294,11 @@ if dataset == "breast_cancer":
     print("Explained variance by each component:", exp_var_pca)
     print("Cumulative explained variance by PCA:", np.cumsum(exp_var_pca)[-1])
 
-    # Calculate the number of qubits needed for our new dimensionality
-    # N_QUBITS = int(np.ceil(np.log2(N_COMPONENTS)))
     print(
         f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits needed: {N_QUBITS}"
     )
 
-    # --- Step 2: Apply Quantum-SMOTE to the preprocessed training data ---
-
-    # --- Apply Quantum-SMOTE ---
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train,
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-        visualize_data(xs_train, y_train, "after QSMOTE")
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
+    # --- Oversampling ---
     if oversampling == "SMOTE":
         visualize_data(xs_train, y_train, "before SMOTE")
         smote = SMOTE(random_state=42)
@@ -396,7 +351,7 @@ if dataset == "immuno":
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
         )
-        print(f"Dataset skimmed to {percent*100:.0f}% of original")
+        print(f"Dataset skimmed to {percent * 100:.0f}% of original")
 
     # === Step 7: Train-test split ===
     X_train, X_test, y_train, y_test = train_test_split(
@@ -424,22 +379,7 @@ if dataset == "immuno":
     print(f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits: {N_QUBITS}")
 
     # === Step 10: Oversampling (if specified) ===
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-
-        print("Class distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
-
-    elif oversampling == "SMOTE":
+    if oversampling == "SMOTE":
         print("\nClass distribution before SMOTE:", Counter(y_train))
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -456,7 +396,6 @@ if dataset == "immuno":
     print(pd.DataFrame(xs_train).isna().sum().sum(), "total missing values remaining")
 
 if dataset == "signal":
-
     data = pd.read_csv(DATA_DIR / "Signalling_solid_cancer.csv")
     # Drop completely empty columns
     data = data.dropna(axis=1, how="all")
@@ -506,7 +445,7 @@ if dataset == "signal":
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
         )
-        print(f"Dataset skimmed to {percent*100:.0f}% of original")
+        print(f"Dataset skimmed to {percent * 100:.0f}% of original")
 
     # === Step 7: Train/test split ===
     X_train, X_test, y_train, y_test = train_test_split(
@@ -531,22 +470,7 @@ if dataset == "signal":
     print(f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits: {N_QUBITS}")
 
     # === Step 10: Oversampling (optional) ===
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-
-        print("Class distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
-
-    elif oversampling == "SMOTE":
+    if oversampling == "SMOTE":
         print("\nClass distribution before SMOTE:", Counter(y_train))
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -563,7 +487,6 @@ if dataset == "signal":
     print(pd.DataFrame(xs_train).isna().sum().sum(), "total missing values remaining")
 
 if dataset == "coldmss":
-
     data = pd.read_csv(DATA_DIR / "coldmss.csv")
 
     # Drop empty columns (e.g., from trailing commas)
@@ -602,7 +525,7 @@ if dataset == "coldmss":
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
         )
-        print(f"Dataset skimmed to {percent*100:.0f}% of original")
+        print(f"Dataset skimmed to {percent * 100:.0f}% of original")
 
     # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -633,20 +556,7 @@ if dataset == "coldmss":
     print(f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits: {N_QUBITS}")
 
     # Oversampling
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-        print("Class distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
-
-    elif oversampling == "SMOTE":
+    if oversampling == "SMOTE":
         print("\nClass distribution before SMOTE:", Counter(y_train))
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -661,7 +571,6 @@ if dataset == "coldmss":
     print(pd.concat([X, Y], axis=1).isna().sum())
     print("\n--- Missing values in PCA-transformed train set ---")
     print(pd.DataFrame(xs_train).isna().sum().sum(), "total missing values remaining")
-    # reset index of xs_train and xs_test
     xs_train.reset_index(drop=True, inplace=True)
     xs_test.reset_index(drop=True, inplace=True)
 if dataset == "crc_lm_cht":
@@ -740,7 +649,7 @@ if dataset == "crc_lm_cht":
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
         )
-        print(f"Dataset skimmed to {percent*100:.0f}% of original")
+        print(f"Dataset skimmed to {percent * 100:.0f}% of original")
 
     # === Step 9: Train/test split ===
     X_train, X_test, y_train, y_test = train_test_split(
@@ -773,22 +682,7 @@ if dataset == "crc_lm_cht":
     print(f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits: {N_QUBITS}")
 
     # === Step 12: Oversampling (optional) ===
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-
-        print("Class distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
-
-    elif oversampling == "SMOTE":
+    if oversampling == "SMOTE":
         print("\nClass distribution before SMOTE:", Counter(y_train))
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -809,7 +703,7 @@ if dataset == "pdac":
     # Drop completely empty rows (if any)
     empty_rows = data[data.isna().all(axis=1)]
     if len(empty_rows) > 0:
-        print(f"🧹 Dropping {len(empty_rows)} completely empty rows.")
+        print(f"Dropping {len(empty_rows)} completely empty rows.")
     data = data.dropna(how="all").reset_index(drop=True)
 
     # Clean column names
@@ -825,7 +719,7 @@ if dataset == "pdac":
     # === Step 2: Drop ID column ===
     if "id" in data.columns:
         data.drop(columns=["id"], inplace=True)
-        print("🗑️  Dropped ID column.")
+        print("Dropped ID column.")
 
     # === Step 3: Remove duplicate rows ===
     print("Duplicate rows:", data.duplicated().sum())
@@ -833,15 +727,15 @@ if dataset == "pdac":
 
     # === Step 4: Separate features and target ===
     if "prognosis" not in data.columns:
-        raise KeyError("❌ Target column 'prognosis' not found in dataset.")
+        raise KeyError("Target column 'prognosis' not found in dataset.")
 
     X = data.drop(columns=["prognosis"])
     Y = data["prognosis"]
 
-    # Drop rows with missing target values (shouldn't happen but safe)
+    # Drop rows with missing target values
     missing_target = Y.isna().sum()
     if missing_target > 0:
-        print(f"⚠️ Dropping {missing_target} samples with missing target labels.")
+        print(f"Dropping {missing_target} samples with missing target labels.")
         X = X.loc[~Y.isna()].reset_index(drop=True)
         Y = Y.dropna().reset_index(drop=True)
 
@@ -865,7 +759,7 @@ if dataset == "pdac":
         X, _, Y, _ = train_test_split(
             X, Y, train_size=percent, stratify=Y, random_state=42
         )
-        print(f"Dataset skimmed to {percent*100:.0f}% of original")
+        print(f"Dataset skimmed to {percent * 100:.0f}% of original")
 
     # === Step 8: Train/test split ===
     X_train, X_test, y_train, y_test = train_test_split(
@@ -896,20 +790,7 @@ if dataset == "pdac":
     print(f"\nNumber of PCA components: {N_COMPONENTS} -> Number of Qubits: {N_QUBITS}")
 
     # === Step 11: Oversampling (optional) ===
-    if oversampling == "QSMOTE":
-        print("\nClass distribution before Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "before QSMOTE")
-        xs_train, y_train = quantum_smote(
-            features=xs_train,
-            labels=y_train.to_numpy(),
-            n_qubits=N_QUBITS,
-            desired_ratio=1.0,
-            split_factor=1.0,
-        )
-        print("Class distribution after Q-SMOTE:", Counter(y_train))
-        visualize_data(xs_train, y_train, "after QSMOTE")
-
-    elif oversampling == "SMOTE":
+    if oversampling == "SMOTE":
         print("\nClass distribution before SMOTE:", Counter(y_train))
         smote = SMOTE(random_state=42)
         xs_train, y_train = smote.fit_resample(xs_train, y_train)
@@ -925,17 +806,15 @@ if dataset == "pdac":
     print("\n--- Missing values in PCA-transformed train set ---")
     print(pd.DataFrame(xs_train).isna().sum().sum(), "total missing values remaining")
 
-if dataset == "stroke" and oversampling != "QSMOTE":
+if dataset == "stroke":
     # Convert y_train and y_test to numpy arrays
-    y_train = y_train.to_numpy(dtype=int)
-    y_test = y_test.to_numpy(dtype=int)
+    y_train = np.asarray(y_train, dtype=int)
+    y_test = np.asarray(y_test, dtype=int)
 
-# Count classes
 train_counts = Counter(y_train)
 test_counts = Counter(y_test)
 
 
-# Convert to proportions
 def proportions(sums):
     """Calculate proportions"""
     total = sum(sums.values())
@@ -948,7 +827,6 @@ from sklearn.metrics import make_scorer, matthews_corrcoef
 
 N_train = xs_train.shape[0]
 GRID_SEARCH = True
-# scoring_parameter = ['roc_auc', 'f1']
 scoring_parameter = {
     "auc": "roc_auc",
     "mcc": make_scorer(matthews_corrcoef),
@@ -964,9 +842,8 @@ param_grid_rbf = {
     "C": C_values,
     "gamma": gamma_values,
 }
-# Seems like gpu doesnt bring too much benefit for these circuits
-# Device Setup..
-dev = qml.device("lightning.qubit", wires=N_QUBITS, batch_obs=True, shots=1000)
+# Shot-based device for the legacy per-entry kernel path (KERNEL_MODE="shots").
+dev = qml.device("lightning.qubit", wires=N_WIRES, batch_obs=True, shots=1000)
 
 
 def plot_kernel_matrix(
@@ -1008,7 +885,6 @@ def plot_kernel_matrix(
     fig_width = matrix_size_inches + colorbar_space
     fig_height = matrix_size_inches
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    # Plot the heatmap
     heatmap = sns.heatmap(
         K_sorted,
         cmap=cmap,
@@ -1058,7 +934,6 @@ def plot_kernel_matrix(
                     color=text_color,
                 )
 
-    # Add title and labels
     if title:
         plt.title(title, fontsize=14, fontweight="bold")
 
@@ -1089,7 +964,6 @@ def plot_kernel_matrix(
 
     plt.tight_layout()
 
-    # Save or show the plot
     if filename and path and save_fig == True:
         plt.savefig(os.path.join(path, filename), dpi=450, bbox_inches="tight")
         plt.close()
@@ -1184,7 +1058,9 @@ def compute_kernel_param(A, B, params, n_jobs=jobs):
 # --------------------------
 # -----CLASSICAL SVM--------
 # --------------------------
-if oversampling in ("QSMOTE", "SMOTE"):
+# The RBF baseline is the grid-searched model only. GridSearchCV clones this
+# template estimator, so it is never fitted on its own.
+if oversampling == "SMOTE":
     classweight = None
 else:
     classweight = "balanced"
@@ -1194,40 +1070,9 @@ classicsvm = SVC(
     class_weight=classweight,
     C=C,
     probability=True,
-    random_state=42,  # optional but recommended for reproducibility
-).fit(xs_train, y_train)
-
-y_pred = classicsvm.predict(xs_test)
-
-# --- ADD THESE DIAGNOSTIC LINES ---
-print("\n--- DIAGNOSTICS ---")
-# Use original numpy to be safe
-import numpy as original_numpy
-
-unique_y_test = original_numpy.unique(y_test)
-unique_y_pred = original_numpy.unique(y_pred)
-
-print(
-    f"Type of y_test: {type(y_test.iloc[0]) if hasattr(y_test, 'iloc') else type(y_test[0])}"
+    random_state=42,
 )
-print(f"Type of y_pred: {type(y_pred[0])}")
-print(f"Unique values in y_test: {unique_y_test}")
-print(f"Unique values in y_pred: {unique_y_pred}")
-print("---------------------\n")
-# --- END OF DIAGNOSTIC LINES ---
 
-# Now print your report and confusion matrix
-print("\nClassification Report:")
-print(classification_report(y_test, y_pred))
-
-print(
-    f"Classical SVM (BP):\n %s"
-    % classification_report(y_test, classicsvm.predict(xs_test))
-)
-print(
-    "ROC AUC Score:",
-    roc_auc_score(y_test, classicsvm.predict(xs_test), multi_class=roc_multiclass),
-)
 # GRID Search
 if GRID_SEARCH is True:
     cv = RepeatedStratifiedKFold(n_splits=4, n_repeats=3, random_state=42)
@@ -1244,7 +1089,6 @@ if GRID_SEARCH is True:
         f"Best {scoring_parameter}: %f using %s"
         % (grid_result.best_score_, grid_result.best_params_)
     )
-    # report all configurations
 best_svm_class = grid.best_estimator_
 print(confusion_matrix(y_test, best_svm_class.predict(xs_test)))
 print(
@@ -1252,37 +1096,33 @@ print(
     % classification_report(y_test, best_svm_class.predict(xs_test))
 )
 y_score_classical = best_svm_class.decision_function(xs_test)
-###
-### These are then used for all following ROC-Images
-###
+# The classical scores are reused by every ROC comparison below.
 
 fpr_c, tpr_c, _ = roc_curve(y_test, y_score_classical)
 auc_c = auc(fpr_c, tpr_c)
 
-# If AUC < 0.5 → invert the scores
+# If AUC < 0.5, invert the scores
 if auc_c < 0.5:
-    print(f"⚠️ Classical AUC < 0.5 ({auc_c:.3f}) → inverting decision scores")
+    print(f"WARNING: classical AUC < 0.5 ({auc_c:.3f}); inverting decision scores")
     y_score_classical = -y_score_classical
     fpr_c, tpr_c, _ = roc_curve(y_test, y_score_classical)
-    auc_c = auc(fpr_c, tpr_c)  # new corrected AUC
+    auc_c = auc(fpr_c, tpr_c)
 
 print("Classical ROC AUC:", auc_c)
 
-# NOTE: the legacy AngleEmbedding ('rotation') kernel block that used to sit
-# here was disabled as a string literal and has been removed for release.
 # --------------------------
 # -----IsingXYZ-Emb--------
 # --------------------------
-# add hamilton encoding (https://arxiv.org/pdf/2310.11891)
-# from pennylane import numpy as np
-dev = qml.device("lightning.qubit", wires=N_QUBITS, batch_obs=True, shots=3000)
+# Hamiltonian (Ising XYZ) feature map, arXiv:2310.11891.
+dev = qml.device("lightning.qubit", wires=N_WIRES, batch_obs=True, shots=3000)
 EV_TIME = 1.0
 TROTT_STEPS = 20
 N_LAYERS = 3
-# params = np.array([EV_TIME, TROTT_STEPS], requires_grad=True)  # Add requires_grad=True
-params = [EV_TIME, TROTT_STEPS, N_LAYERS]  # Add requires_grad=True
+params = [EV_TIME, TROTT_STEPS, N_LAYERS]
 
 model_name = "ising_emb" if TOPOLOGY == "chain" else f"ising_emb_{TOPOLOGY}"
+if N_WIRES != N_QUBITS:
+    model_name += f"_{N_WIRES}w"  # chain with the spare wire
 
 
 def Hamiltonian_feature_map(x, params, wires, initial_state=True, seed=42):
@@ -1297,7 +1137,7 @@ def Hamiltonian_feature_map(x, params, wires, initial_state=True, seed=42):
         seed: Random seed for reproducibility
     """
     n_qubits = len(wires)
-    t, T, N_LAYERS = params  # Fixed parameter order
+    t, T, N_LAYERS = params
 
     # Apply random initial state if requested
     if initial_state:
@@ -1327,13 +1167,12 @@ def kernel_circ(a, b, params):
         b: Second data point
         params: [t, T] where t is evolution time and T is Trotter steps
     """
-    wires = range(N_QUBITS)
+    wires = range(N_WIRES)
 
     # Apply feature map to first data point
     Hamiltonian_feature_map(a, params, wires=wires, initial_state=True)
 
     # Apply adjoint feature map to second data point
-    # Note: For the adjoint, we skip applying the initial state again
     qml.adjoint(Hamiltonian_feature_map)(b, params, wires=wires, initial_state=True)
 
     return qml.probs(wires=wires)
@@ -1345,7 +1184,7 @@ def kernel_circ(a, b, params):
 # kernel_circ to ~1e-15 by verify_fast_kernel.py.
 if KERNEL_MODE == "exact":
     compute_kernel_param = kernel_align.make_exact_kernel_fn(
-        N_QUBITS, seed=42, topology=TOPOLOGY
+        N_WIRES, seed=42, topology=TOPOLOGY
     )
 
 
@@ -1481,7 +1320,9 @@ def evaluate_kernel(params, model_name, target_blocks=40, prefix="", psep="_"):
     y_pred = best_model.predict(K_test_final)
     y_score = best_model.decision_function(K_test_final)
 
-    print("\n HamiltonianFeatureMap-Report:")
+    which = "aligned" if prefix else "initial"
+    print(f"\n HamiltonianFeatureMap-Report ({which} params: "
+          f"t={float(params[0]):g}, T={int(params[1])}, L={int(params[2])}):")
     print(classification_report(y_test, y_pred))
     print(confusion_matrix(y_test, y_pred))
     print("ROC AUC Score:", roc_auc_score(y_test, y_score))
@@ -1551,10 +1392,11 @@ else:
     align_result = kernel_align.search_alignment(
         xs_train,
         y_train,
-        n_qubits=N_QUBITS,
+        n_qubits=N_WIRES,
         n_layers=N_LAYERS,
         topology=TOPOLOGY,
         t_transform="clip",
+        initial_params=params,  # [EV_TIME, TROTT_STEPS, N_LAYERS], reported for reference
         L_values=[1, 2, 3, 4, 5],
         dataset=dataset,
         model_name=model_name,
@@ -1567,7 +1409,6 @@ else:
 if ALIGN_ONLY:
     sys.exit(f"Alignment complete: params={opt_params}")
 
-# redefine params as opt params
 params = opt_params
 model_name = f"{model_name}_aligned"
 if GRID_SEARCH and not ALIGN_ONLY:

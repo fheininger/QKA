@@ -672,6 +672,7 @@ def search_alignment(
     subsample_seed=42,
     t_transform="clip",
     period_t=2 * np.pi,
+    initial_params=None,
     refine=True,
     L_values=None,
     min_offdiag_var=1e-6,
@@ -707,6 +708,11 @@ def search_alignment(
             bias the old StratifiedShuffleSplit(train_size=500) accepted.
         t_transform: "clip" (QSVM_template) or "wrap" (pdac), applied to the
             reported t so the returned params match each script's convention.
+        initial_params: optional [t, T, L] the script starts from (its
+            EV_TIME, TROTT_STEPS, N_LAYERS). Evaluated and reported alongside
+            the search result so the output reads as "from here to there";
+            it does not seed or constrain the search, which has no starting
+            point. Stored under ``"initial"`` in the result.
         L_values: optional replicate axis. Re-scores the winning (tau, T) at
             these SEL depths and reports mean/std -- turning the bias source
             above into an honest error bar.
@@ -722,7 +728,7 @@ def search_alignment(
         dict with "opt_params" [t, T, L], "best_kta", "landscape", "refined",
         "replicates", "n_used", "n_evals", "wall_s" and "meta".
     """
-    t0 = time.perf_counter()
+    t_start = time.perf_counter()
     X = np.atleast_2d(np.asarray(xs_train, dtype=float))
     y = np.asarray(y_train).ravel()
 
@@ -763,6 +769,24 @@ def search_alignment(
               "max_samples=~4000 unless you specifically need the full set.", flush=True)
 
     cache = {}
+
+    # --- the script's starting point, for reference only ----------------------
+    initial = None
+    if initial_params is not None:
+        t0, T0, L0 = float(initial_params[0]), int(initial_params[1]), int(initial_params[2])
+        with blas_limit(blas_threads):
+            K0 = compute_kernel_exact(X, X, [t0, T0, L0], n_qubits=n_qubits, n_feat=n_feat,
+                                      seed=seed, chunk=chunk, topology=topology)
+            kta0 = target_alignment(y, K0, rescale_class_labels)
+        var0 = kernel_diagnostics(K0)["offdiag_var"]
+        del K0
+        cache[_cache_key(t0, T0, L0)] = kta0
+        initial = {"params": [t0, T0, L0], "kta": float(kta0), "offdiag_var": float(var0)}
+        if verbose:
+            note = (f" (t > {period_t:.3g}: the script would clip it)" if t0 > period_t else "")
+            print(f"[align] initial params t={t0:g} T={T0} L={L0}: KTA={kta0:.4f} "
+                  f"(offdiag_var={var0:.2e}){note}", flush=True)
+
     land = align_landscape(X, y, n_qubits=n_qubits, tau_grid=tau_grid,
                            T_values=T_values, n_layers=n_layers, n_feat=n_feat,
                            seed=seed, chunk=chunk,
@@ -829,16 +853,23 @@ def search_alignment(
     t_best = np.clip(t_best, 0.0, period_t) if t_transform == "clip" else t_best % period_t
     opt_params = [round(float(t_best), 6), int(best_T), int(n_layers)]
 
-    wall = time.perf_counter() - t0
+    wall = time.perf_counter() - t_start
     if verbose:
+        gain = ""
+        if initial is not None:
+            k0 = initial["kta"]
+            gain = (f" | initial {k0:.4f} -> aligned {best_kta:.4f} "
+                    + (f"(x{best_kta / k0:.1f})" if k0 > 0 else f"({best_kta - k0:+.4f})"))
+        n_extra = len(cache) - land["n_evals"] - (1 if initial is not None else 0)
         print(f"[align] best KTA {best_kta:.4f} at t={opt_params[0]}, "
-              f"T={opt_params[1]}, L={opt_params[2]} "
-              f"| {land['n_evals']} grid + {len(cache) - land['n_evals']} refine evals "
+              f"T={opt_params[1]}, L={opt_params[2]}{gain} "
+              f"| {land['n_evals']} grid + {n_extra} refine evals "
               f"| {wall:.1f} s")
 
     res = {
         "opt_params": opt_params,
         "best_kta": best_kta,
+        "initial": initial,
         "landscape": land,
         "refined": refined,
         "replicates": replicates,
@@ -886,13 +917,21 @@ def plot_alignment_landscape(res, path):
 
     t_opt, T_opt = res["opt_params"][0], res["opt_params"][1]
     ax.plot(t_opt / T_opt, T_opt, "r*", markersize=16, markeredgecolor="white")
+    init_txt = ""
+    initial = res.get("initial")
+    if initial:
+        t0, T0, _ = initial["params"]
+        init_txt = f"initial KTA={initial['kta']:.4f} (t={t0:g}, T={T0}) -> "
+        if tau.min() <= t0 / T0 <= tau.max() and T.min() <= T0 <= T.max():
+            ax.plot(t0 / T0, T0, "ws", markersize=10, markeredgecolor="black")
     meta = res["meta"]
     ax.set_title(f"{meta['dataset']} {meta['model_name']} "
                  f"({meta['n_qubits']}q, L={meta['n_layers']}, n={res['n_used']}, "
                  f"{meta.get('topology', 'chain')}: "
                  f"{meta.get('n_loaded', meta['n_qubits'] - 1)}/{meta['n_feat']} feat)\n"
-                 f"best KTA={res['best_kta']:.4f} at t={t_opt:g}, T={T_opt} "
-                 f"(white: t > {meta['period_t']:.3g}, unreachable)", fontsize=10)
+                 f"{init_txt}best KTA={res['best_kta']:.4f} (t={t_opt:g}, T={T_opt})\n"
+                 f"white square: initial; white cells: t > {meta['period_t']:.3g}, unreachable",
+                 fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=300)
     plt.close(fig)
