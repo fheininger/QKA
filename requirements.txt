@@ -6,6 +6,8 @@
 #   python -m venv .venv && . .venv/bin/activate
 #   pip install -r requirements.txt
 #
+# Conda users (and Code Ocean): environment.yml carries the same pins.
+#
 # numpy is held below 2.0: PennyLane 0.37 is not compatible with numpy>=2.
 
 numpy==1.26.4

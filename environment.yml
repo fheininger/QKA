@@ -1,0 +1,36 @@
+# Conda environment for reproducing the QKA results (Code Ocean or local).
+#
+#   conda env create -f environment.yml
+#   conda activate qka
+#   python QSVM_template.py
+#
+# Python 3.11.13 and the exact package versions the published results were
+# produced with (Linux x86_64). Everything except the interpreter is installed
+# through pip so the pins are identical to requirements.txt. PennyLane 0.37
+# needs numpy < 2, and its transitive dependencies autoray, autograd, networkx
+# and rustworkx are not upper-bounded by PennyLane itself, so they are pinned
+# here too (newer releases break `import pennylane`).
+name: qka
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11.13
+  - pip
+  - pip:
+      - numpy==1.26.4
+      - scipy==1.11.4
+      - pandas==2.3.1
+      - scikit-learn==1.8.0
+      - imbalanced-learn==0.14.1
+      - pennylane==0.37.0
+      - pennylane-lightning==0.37.0
+      - autoray==0.7.2
+      - autograd==1.8.0
+      - networkx==2.8.8
+      - rustworkx==0.16.0
+      - matplotlib==3.10.5
+      - seaborn==0.13.2
+      - joblib==1.5.1
+      - threadpoolctl==3.6.0
+      - tqdm==4.67.1
